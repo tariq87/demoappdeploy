@@ -17,37 +17,35 @@ pipeline {
         
         stage('Test') {
             steps {
-                script {
-                    docker.image('python:3.9-slim').inside {
-                        sh 'pip install -r requirements.txt'
-                        sh 'python -m unittest test_app.py'
-                    }
-                }
+                sh '''
+                    docker run --rm -v "$PWD":/app -w /app python:3.9-slim /bin/bash -c "
+                        pip install -r requirements.txt
+                        python -m unittest test_app.py
+                    "
+                '''
             }
         }
         
         stage('Build and Push Docker Image') {
             steps {
-                script {
-                    def dockerImage = docker.build("${IMAGE_NAME}:${IMAGE_TAG}")
-                    docker.withRegistry('', DOCKERHUB_CREDENTIALS) {
-                        dockerImage.push()
-                        dockerImage.push('latest')
-                    }
-                }
+                sh """
+                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    echo ${DOCKERHUB_CREDENTIALS_PSW} | docker login -u ${DOCKERHUB_CREDENTIALS_USR} --password-stdin
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker push ${IMAGE_NAME}:latest
+                    docker logout
+                """
             }
         }
         
         stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    docker.image('bitnami/kubectl:latest').inside {
-                        withKubeConfig([credentialsId: 'kubernetes-config']) {
-                            sh "sed -i 's|{{IMAGE_NAME}}|${IMAGE_NAME}:${IMAGE_TAG}|' k8s-deployment.yaml"
-                            sh "kubectl apply -f k8s-deployment.yaml"
-                        }
-                    }
-                }
+                sh """
+                    docker run --rm -v "$PWD":/app -w /app bitnami/kubectl:latest /bin/bash -c "
+                        sed -i 's|{{IMAGE_NAME}}|${IMAGE_NAME}:${IMAGE_TAG}|' k8s-deployment.yaml
+                        kubectl apply -f k8s-deployment.yaml
+                    "
+                """
             }
         }
     }
