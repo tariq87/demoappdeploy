@@ -15,24 +15,25 @@ pipeline {
             }
         }
         
-        stage('Install Dependencies') {
-            steps {
-                sh 'pip install -r requirements.txt'
-            }
-        }
-        
         stage('Test') {
             steps {
-                sh 'python -m unittest test_app.py'
+                script {
+                    docker.image('python:3.9-slim').inside {
+                        sh 'pip install -r requirements.txt'
+                        sh 'python -m unittest test_app.py'
+                    }
+                }
             }
         }
         
         stage('Build and Push Docker Image') {
             steps {
                 script {
-                    sh 'echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin'
-                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
-                    sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+                    def dockerImage = docker.build("${IMAGE_NAME}:${IMAGE_TAG}")
+                    docker.withRegistry('', DOCKERHUB_CREDENTIALS) {
+                        dockerImage.push()
+                        dockerImage.push('latest')
+                    }
                 }
             }
         }
@@ -40,16 +41,14 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    sh "sed -i 's|{{IMAGE_NAME}}|${IMAGE_NAME}:${IMAGE_TAG}|' k8s-deployment.yaml"
-                    sh "kubectl apply -f k8s-deployment.yaml"
+                    docker.image('bitnami/kubectl:latest').inside {
+                        withKubeConfig([credentialsId: 'kubernetes-config']) {
+                            sh "sed -i 's|{{IMAGE_NAME}}|${IMAGE_NAME}:${IMAGE_TAG}|' k8s-deployment.yaml"
+                            sh "kubectl apply -f k8s-deployment.yaml"
+                        }
+                    }
                 }
             }
-        }
-    }
-    
-    post {
-        always {
-            sh 'docker logout'
         }
     }
 }
